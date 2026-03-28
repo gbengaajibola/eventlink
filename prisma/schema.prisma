@@ -1,0 +1,418 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// USER & AUTH
+// ============================================
+
+model User {
+  id                String    @id @default(cuid())
+  email             String    @unique
+  emailVerified     DateTime?
+  passwordHash      String?
+  name              String?
+  displayName       String?
+  avatarUrl         String?
+  bio               String?
+  interests         String[]
+  privacySettings  Json      @default("{\"connectionRequests\": \"all\", \"eventVisibility\": \"public\", \"profileVisibility\": \"public\"}")
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  // Relations
+  accounts          Account[]
+  sessions          Session[]
+  organizedEvents   Event[]   @relation("EventOrganizer")
+  tickets           Ticket[]
+  transferredTickets Ticket[]  @relation("TicketTransfer")
+  orders            Order[]
+  connectionsSent    Connection[]   @relation("ConnectionRequester")
+  connectionsRecv   Connection[]   @relation("ConnectionAddressee")
+  eventPosts        EventPost[]
+  postComments      PostComment[]
+  eventChatMessages EventChatMessage[]
+  directMessagesSent    DirectMessage[] @relation("MessageSender")
+  directMessagesRecv     DirectMessage[] @relation("MessageRecipient")
+  notifications     Notification[]
+  likes             Like[]
+  messageRequests   MessageRequest[] @relation("MessageRequestRecipient")
+
+  @@index([email])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ============================================
+// EVENTS & TICKETING
+// ============================================
+
+model Event {
+  id              String        @id @default(cuid())
+  organizerId     String
+  title           String
+  description     String?
+  category        EventCategory @default(OTHER)
+  startDateTime   DateTime
+  endDateTime     DateTime
+  venueName       String
+  venueAddress    String
+  coverImageUrl   String?
+  status          EventStatus    @default(DRAFT)
+  refundPolicy    RefundPolicy  @default(FULL_REFUND_7_DAYS)
+  postEventDays   Int           @default(7)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  // Relations
+  organizer       User          @relation("EventOrganizer", fields: [organizerId], references: [id])
+  ticketTiers     TicketTier[]
+  orders          Order[]
+  tickets         Ticket[]
+  posts           EventPost[]
+  chatMessages    EventChatMessage[]
+  attendees       EventAttendee[]
+
+  @@index([organizerId])
+  @@index([startDateTime])
+  @@index([category])
+  @@index([status])
+}
+
+model TicketTier {
+  id              String        @id @default(cuid())
+  eventId         String
+  name            String
+  description     String?
+  price           Decimal       @db.Decimal(10, 2)
+  quantityTotal   Int
+  quantitySold    Int           @default(0)
+  saleStartDate   DateTime?
+  saleEndDate     DateTime?
+  tierType        TicketTierType @default(GENERAL)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  // Relations
+  event           Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  tickets         Ticket[]
+
+  @@index([eventId])
+}
+
+model Order {
+  id                String        @id @default(cuid())
+  userId            String
+  eventId           String
+  totalAmount       Decimal       @db.Decimal(10, 2)
+  status            OrderStatus   @default(PENDING)
+  stripeSessionId   String?
+  stripePaymentId  String?
+  promoCode        String?
+  discountAmount   Decimal       @default(0) @db.Decimal(10, 2)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  // Relations
+  user              User          @relation(fields: [userId], references: [id])
+  event             Event         @relation(fields: [eventId], references: [id])
+  tickets           Ticket[]
+
+  @@index([userId])
+  @@index([eventId])
+  @@index([stripeSessionId])
+  @@index([status])
+}
+
+model Ticket {
+  id              String        @id @default(cuid())
+  orderId         String
+  eventId         String
+  ticketTierId    String
+  userId          String
+  qrCodeToken     String        @unique @default(uuid())
+  isCheckedIn     Boolean       @default(false)
+  checkedInAt     DateTime?
+  transferredToId String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  // Relations
+  order           Order         @relation(fields: [orderId], references: [id])
+  ticketTier      TicketTier    @relation(fields: [ticketTierId], references: [id])
+  user            User          @relation(fields: [userId], references: [id])
+  event           Event        @relation(fields: [eventId], references: [id])
+  transferredTo   User?         @relation("TicketTransfer", fields: [transferredToId], references: [id])
+
+  @@index([orderId])
+  @@index([ticketTierId])
+  @@index([userId])
+  @@index([eventId])
+  @@index([qrCodeToken])
+}
+
+// ============================================
+// SOCIAL LAYER
+// ============================================
+
+model Connection {
+  id            String            @id @default(cuid())
+  requesterId   String
+  addresseeId   String
+  status        ConnectionStatus @default(PENDING)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  // Relations
+  requester     User              @relation("ConnectionRequester", fields: [requesterId], references: [id])
+  addressee     User              @relation("ConnectionAddressee", fields: [addresseeId], references: [id])
+
+  @@unique([requesterId, addresseeId])
+  @@index([requesterId])
+  @@index([addresseeId])
+}
+
+model EventPost {
+  id          String        @id @default(cuid())
+  eventId     String
+  userId      String
+  content     String
+  imageUrl    String?
+  likesCount  Int           @default(0)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  // Relations
+  event       Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user        User          @relation(fields: [userId], references: [id])
+  comments    PostComment[]
+  likes       Like[]
+
+  @@index([eventId])
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model PostComment {
+  id        String    @id @default(cuid())
+  postId    String
+  userId    String
+  content   String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  // Relations
+  post      EventPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id])
+
+  @@index([postId])
+  @@index([userId])
+}
+
+model Like {
+  id        String    @id @default(cuid())
+  postId    String
+  userId    String
+  createdAt DateTime  @default(now())
+
+  // Relations
+  post      EventPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id])
+
+  @@unique([postId, userId])
+  @@index([postId])
+  @@index([userId])
+}
+
+model EventChatMessage {
+  id        String    @id @default(cuid())
+  eventId   String
+  userId    String
+  room      String    @default("general")
+  content   String
+  createdAt DateTime  @default(now())
+
+  // Relations
+  event     Event     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id])
+
+  @@index([eventId])
+  @@index([userId])
+  @@index([room])
+}
+
+// ============================================
+// DIRECT MESSAGING
+// ============================================
+
+model DirectMessage {
+  id          String    @id @default(cuid())
+  senderId    String
+  recipientId String
+  content     String
+  readAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  // Relations
+  sender      User      @relation("MessageSender", fields: [senderId], references: [id])
+  recipient   User      @relation("MessageRecipient", fields: [recipientId], references: [id])
+
+  @@index([senderId])
+  @@index([recipientId])
+}
+
+model MessageRequest {
+  id          String    @id @default(cuid())
+  senderId    String
+  recipientId String
+  content     String?
+  createdAt   DateTime  @default(now())
+
+  // Relations
+  recipient   User      @relation("MessageRequestRecipient", fields: [recipientId], references: [id])
+
+  @@index([recipientId])
+}
+
+// ============================================
+// NOTIFICATIONS
+// ============================================
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType
+  title     String
+  body      String?
+  payload   Json?
+  readAt    DateTime?
+  createdAt DateTime        @default(now())
+
+  // Relations
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+// ============================================
+// ENUMS
+// ============================================
+
+enum EventCategory {
+  MUSIC
+  SPORTS
+  TECH
+  ARTS
+  FOOD
+  NETWORKING
+  OTHER
+}
+
+enum EventStatus {
+  DRAFT
+  PUBLISHED
+  CANCELLED
+  COMPLETED
+}
+
+enum TicketTierType {
+  GENERAL
+  VIP
+  EARLY_BIRD
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  REFUNDED
+  CANCELLED
+}
+
+enum ConnectionStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+}
+
+enum NotificationType {
+  CONNECTION_REQUEST
+  CONNECTION_ACCEPTED
+  NEW_MESSAGE
+  EVENT_REMINDER
+  EVENT_UPDATE
+  TICKET_PURCHASED
+  POST_LIKE
+  POST_COMMENT
+}
+
+enum RefundPolicy {
+  NO_REFUNDS
+  FULL_REFUND_7_DAYS
+  FULL_REFUND_3_DAYS
+  FULL_REFUND_1_DAY
+}
+
+// ============================================
+// EVENT ATTENDEE (for Who's Going feature)
+// ============================================
+
+model EventAttendee {
+  id          String    @id @default(cuid())
+  eventId     String
+  userId      String
+  isVisible   Boolean   @default(true)
+  joinedAt    DateTime  @default(now())
+
+  // Relations
+  event       Event     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  @@index([eventId])
+  @@index([userId])
+}
